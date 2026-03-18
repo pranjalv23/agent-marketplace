@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from config import AGENT_URLS
 from router.registry import AgentRegistry
-from router.router_agent import RouterAgent
+from router.router_agent import EmbeddingRouter
 from router.a2a_caller import AgentCaller
 
 load_dotenv()
@@ -21,13 +21,14 @@ logging.basicConfig(
 logger = logging.getLogger("marketplace.api")
 
 registry = AgentRegistry(AGENT_URLS)
-router_agent = RouterAgent()
+router = EmbeddingRouter()
 caller = AgentCaller()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await registry.refresh()
+    await router.build_index(registry.get_cards())
     logger.info("Marketplace started — %d agent(s) registered", len(registry.get_cards()))
     yield
     logger.info("Marketplace shutdown")
@@ -70,14 +71,13 @@ class DirectQueryResponse(BaseModel):
 
 @app.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
-    """Route a query to the best agent via LLM-based routing."""
+    """Route a query to the best agent via embedding-based routing."""
     logger.info("POST /query — query='%s'", request.query[:100])
 
-    routing_context = registry.get_routing_context()
-    if routing_context == "No agents available.":
+    if not registry.get_cards():
         raise HTTPException(status_code=503, detail="No agents available. Try POST /agents/refresh.")
 
-    decision = await router_agent.route(request.query, routing_context)
+    decision = await router.route(request.query)
 
     agent_url = registry.get_url(decision.agent_name)
     if not agent_url:
@@ -125,9 +125,10 @@ async def list_agents():
 
 @app.post("/agents/refresh")
 async def refresh_agents():
-    """Re-fetch Agent Cards from all registered agents."""
+    """Re-fetch Agent Cards and rebuild the embedding index."""
     await registry.refresh()
     cards = registry.get_cards()
+    await router.build_index(cards)
     return {"status": "refreshed", "agents_available": len(cards), "agent_ids": list(cards.keys())}
 
 

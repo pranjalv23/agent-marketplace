@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import httpx
@@ -13,22 +14,30 @@ class AgentRegistry:
         self._cards: dict[str, dict] = {}
 
     async def refresh(self):
-        """Fetch Agent Cards from all registered agent URLs."""
+        """Fetch Agent Cards from all registered agent URLs in parallel."""
         logger.info("Refreshing agent cards from %d agent(s)", len(self._agent_urls))
         self._cards = {}
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            for agent_id, base_url in self._agent_urls.items():
+            async def _fetch(agent_id: str, base_url: str) -> tuple[str, dict | None]:
                 try:
-                    # A2A Agent Card is served at /.well-known/agent.json
                     url = f"{base_url}/.well-known/agent.json"
                     response = await client.get(url)
                     response.raise_for_status()
                     card = response.json()
-                    self._cards[agent_id] = card
                     logger.info("Fetched card for '%s': %s", agent_id, card.get("name", "unknown"))
+                    return agent_id, card
                 except Exception as e:
                     logger.error("Failed to fetch card for '%s' at %s: %s", agent_id, base_url, e)
+                    return agent_id, None
+
+            results = await asyncio.gather(
+                *[_fetch(aid, url) for aid, url in self._agent_urls.items()]
+            )
+
+        for agent_id, card in results:
+            if card is not None:
+                self._cards[agent_id] = card
 
         logger.info("Registry refreshed — %d/%d agents available",
                      len(self._cards), len(self._agent_urls))
