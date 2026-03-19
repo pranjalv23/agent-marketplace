@@ -18,18 +18,25 @@ class AgentRegistry:
         logger.info("Refreshing agent cards from %d agent(s)", len(self._agent_urls))
         self._cards = {}
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             async def _fetch(agent_id: str, base_url: str) -> tuple[str, dict | None]:
-                try:
-                    url = f"{base_url}/a2a/.well-known/agent.json"
-                    response = await client.get(url)
-                    response.raise_for_status()
-                    card = response.json()
-                    logger.info("Fetched card for '%s': %s", agent_id, card.get("name", "unknown"))
-                    return agent_id, card
-                except Exception as e:
-                    logger.error("Failed to fetch card for '%s' at %s: %s", agent_id, base_url, e)
-                    return agent_id, None
+                url = f"{base_url}/a2a/.well-known/agent.json"
+                for attempt in range(3):
+                    try:
+                        response = await client.get(url)
+                        response.raise_for_status()
+                        card = response.json()
+                        logger.info("Fetched card for '%s': %s", agent_id, card.get("name", "unknown"))
+                        return agent_id, card
+                    except Exception as e:
+                        if attempt < 2:
+                            logger.warning("Attempt %d/3 failed for '%s': %s — retrying in 5s",
+                                           attempt + 1, agent_id, e)
+                            await asyncio.sleep(5)
+                        else:
+                            logger.error("Failed to fetch card for '%s' at %s after 3 attempts: %s",
+                                         agent_id, base_url, e)
+                return agent_id, None
 
             results = await asyncio.gather(
                 *[_fetch(aid, url) for aid, url in self._agent_urls.items()]
