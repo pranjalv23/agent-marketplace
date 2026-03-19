@@ -37,7 +37,7 @@ class AgentCaller:
             },
         }
 
-        a2a_endpoint = f"{agent_url}/a2a"
+        a2a_endpoint = f"{agent_url}/a2a/"
         logger.info("Calling A2A agent at %s — task_id='%s'", a2a_endpoint, task_id)
 
         async with httpx.AsyncClient(timeout=120.0) as client:
