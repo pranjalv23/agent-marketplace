@@ -41,7 +41,7 @@ class AgentCaller:
         a2a_endpoint = f"{agent_url}/a2a/"
         logger.info("Calling A2A agent at %s — task_id='%s'", a2a_endpoint, task_id)
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             response = await client.post(a2a_endpoint, json=payload)
             response.raise_for_status()
             data = response.json()
