@@ -1,6 +1,6 @@
 import logging
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("marketplace.router")
@@ -20,7 +20,7 @@ class EmbeddingRouter:
     """
 
     def __init__(self):
-        self._embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+        self._embeddings = NVIDIAEmbeddings(model="nvidia/nv-embed-v1")
         self._agent_embeddings: dict[str, list[float]] = {}
         self._agent_descriptions: dict[str, str] = {}
 
