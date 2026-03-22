@@ -211,12 +211,7 @@ async def refresh_agents():
 
 
 AVAILABLE_MODELS = [
-    {"id": "groq/gpt-oss-120b", "label": "GPT-OSS 120B (Groq)", "provider": "groq"},
-    {"id": "groq/llama-4-scout", "label": "Llama 4 Scout (Groq)", "provider": "groq"},
-    {"id": "groq/llama-4-maverick", "label": "Llama 4 Maverick (Groq)", "provider": "groq"},
-    {"id": "gemini/gemini-2.5-flash", "label": "Gemini 2.5 Flash", "provider": "gemini"},
-    {"id": "gemini/gemini-2.5-pro", "label": "Gemini 2.5 Pro", "provider": "gemini"},
-    {"id": "nvidia/nemotron-120b", "label": "Nemotron 120B (NVIDIA)", "provider": "nvidia"},
+    {"id": "azure/llama-4-maverick", "label": "Llama 4 Maverick", "provider": "Azure AI Foundry"},
 ]
 
 
