@@ -311,6 +311,13 @@ async def proxy_list_files(agent_id: str, session_id: str):
     return resp.json()
 
 
+def _parse_error(resp) -> str:
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text or f"Agent returned {resp.status_code}"
+
+
 @app.post("/auth/register")
 async def proxy_register(http_request: Request):
     """Proxy registration to the financial agent, then attach a JWT token here."""
@@ -318,7 +325,7 @@ async def proxy_register(http_request: Request):
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{AGENT_URLS['financial-agent']}/auth/register", json=body)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.json())
+        raise HTTPException(status_code=resp.status_code, detail=_parse_error(resp))
     data = resp.json()
     return {**data, "token": _create_token(data["user_id"])}
 
@@ -330,7 +337,7 @@ async def proxy_login(http_request: Request):
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{AGENT_URLS['financial-agent']}/auth/login", json=body)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.json())
+        raise HTTPException(status_code=resp.status_code, detail=_parse_error(resp))
     data = resp.json()
     return {**data, "token": _create_token(data["user_id"])}
 
