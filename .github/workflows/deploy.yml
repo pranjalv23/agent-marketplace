@@ -1,0 +1,27 @@
+name: Deploy agent-marketplace
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Deploy to OCI VM
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ubuntu
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/repos/agent-marketplace
+            git fetch --tags
+            git checkout ${{ github.ref_name }}
+            cd ~/deploy
+            docker compose build --no-cache agent-marketplace
+            docker compose up -d --no-deps agent-marketplace
+            docker image prune -f
