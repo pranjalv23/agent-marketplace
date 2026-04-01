@@ -18,7 +18,8 @@ class AgentCaller:
     async def close(self):
         await self._client.aclose()
 
-    async def call_agent(self, agent_url: str, query: str, session_id: str | None = None) -> str:
+    async def call_agent(self, agent_url: str, query: str, session_id: str | None = None,
+                   user_id: str | None = None, mode: str | None = None) -> str:
         """
         Send a message/send request to an A2A agent and return the response text.
 
@@ -26,6 +27,8 @@ class AgentCaller:
             agent_url: Base URL of the A2A agent (e.g., http://localhost:9001)
             query: The user's query text
             session_id: Optional session ID for conversation continuity
+            user_id: Optional user ID for personalization
+            mode: Optional agent execution mode
         """
         task_id = uuid.uuid4().hex
         session_id = session_id or uuid.uuid4().hex
@@ -42,6 +45,10 @@ class AgentCaller:
                     "messageId": uuid.uuid4().hex,
                     "role": "user",
                     "parts": [{"type": "text", "text": query}],
+                },
+                "metadata": {
+                    "user_id": user_id,
+                    "mode": mode,
                 },
                 "acceptedOutputModes": ["text"],
             },

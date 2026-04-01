@@ -164,14 +164,19 @@ async def query(request: Request, body: QueryRequest):
 
     decision = await router.route(body.query)
 
-    agent_url = registry.get_url(decision.agent_name)
-    if not agent_url:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Agent '{decision.agent_name}' not found. Available: {list(registry.get_cards().keys())}",
-        )
+    raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = _decode_token(raw) if raw else None
 
-    response_text = await caller.call_agent(agent_url, body.query, body.session_id)
+    # Determine mode based on agent name
+    mode = None
+    if decision.agent_name == "financial-agent":
+        mode = "financial_analyst"
+    elif decision.agent_name == "research-agent":
+        mode = "researcher"
+
+    response_text = await caller.call_agent(
+        agent_url, body.query, body.session_id, user_id=user_id, mode=mode
+    )
 
     return QueryResponse(
         query=body.query,
@@ -194,7 +199,19 @@ async def direct_query(agent_id: str, request: Request, body: DirectQueryRequest
             detail=f"Agent '{agent_id}' not found. Available: {list(AGENT_URLS.keys())}",
         )
 
-    response_text = await caller.call_agent(agent_url, body.query, body.session_id)
+    raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = _decode_token(raw) if raw else None
+
+    # Determine mode based on agent id
+    mode = None
+    if agent_id == "financial-agent":
+        mode = "financial_analyst"
+    elif agent_id == "research-agent":
+        mode = "researcher"
+
+    response_text = await caller.call_agent(
+        agent_url, body.query, body.session_id, user_id=user_id, mode=mode
+    )
 
     return DirectQueryResponse(
         agent_id=agent_id,
