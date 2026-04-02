@@ -425,6 +425,20 @@ async def proxy_list_files(agent_id: str, session_id: str):
     return resp.json()
 
 
+@app.get("/agents/{agent_id}/charts/{ticker}")
+async def proxy_charts(agent_id: str, ticker: str, request: Request):
+    """Proxy chart data request to the target agent."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    params = dict(request.query_params)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{agent_url}/charts/{ticker}", params=params)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
 def _parse_error(resp) -> str:
     try:
         return resp.json()
