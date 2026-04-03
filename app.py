@@ -150,10 +150,12 @@ class QueryRequest(BaseModel):
     session_id: str | None = None
     response_format: str | None = None
     model_id: str | None = None
+    watchlist_id: str | None = None
+    as_of_date: str | None = None
 
     model_config = {"json_schema_extra": {"examples": [
-        {"query": "Analyze RELIANCE.NS stock", "session_id": None, "response_format": "detailed", "model_id": None},
-        {"query": "Find papers on transformer architectures", "session_id": None, "response_format": "summary", "model_id": None},
+        {"query": "Analyze RELIANCE.NS stock", "session_id": None, "response_format": "detailed", "model_id": None, "watchlist_id": None, "as_of_date": None},
+        {"query": "Find papers on transformer architectures", "session_id": None, "response_format": "summary", "model_id": None, "watchlist_id": None, "as_of_date": None},
     ]}}
 
 
@@ -169,6 +171,8 @@ class DirectQueryRequest(BaseModel):
     session_id: str | None = None
     response_format: str | None = None
     model_id: str | None = None
+    watchlist_id: str | None = None
+    as_of_date: str | None = None
 
 
 class DirectQueryResponse(BaseModel):
@@ -208,6 +212,7 @@ async def query(request: Request, body: QueryRequest):
     response_text = await caller.call_agent(
         agent_url, body.query, body.session_id, user_id=user_id, mode=mode,
         request_id=request.state.request_id,
+        watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
     )
 
     return QueryResponse(
@@ -244,6 +249,7 @@ async def direct_query(agent_id: str, request: Request, body: DirectQueryRequest
     response_text = await caller.call_agent(
         agent_url, body.query, body.session_id, user_id=user_id, mode=mode,
         request_id=request.state.request_id,
+        watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
     )
 
     return DirectQueryResponse(
@@ -275,7 +281,9 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
                                                response_format=body.response_format,
                                                model_id=body.model_id,
                                                user_id=user_id,
-                                               request_id=_request_id):
+                                               request_id=_request_id,
+                                               watchlist_id=body.watchlist_id,
+                                               as_of_date=body.as_of_date):
             yield f"data: {json.dumps({'text': chunk})}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -318,7 +326,9 @@ async def query_stream(body: QueryRequest, request: Request):
                                                response_format=body.response_format,
                                                model_id=body.model_id,
                                                user_id=user_id,
-                                               request_id=_request_id):
+                                               request_id=_request_id,
+                                               watchlist_id=body.watchlist_id,
+                                               as_of_date=body.as_of_date):
             yield f"data: {json.dumps({'text': chunk})}\n\n"
 
         yield "data: [DONE]\n\n"
@@ -437,6 +447,91 @@ async def proxy_charts(agent_id: str, ticker: str, request: Request):
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     return resp.json()
+
+
+# ── Watchlist proxy endpoints ──
+
+@app.post("/agents/{agent_id}/watchlists")
+async def proxy_create_watchlist(agent_id: str, request: Request):
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    
+    raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = _decode_token(raw) if raw else None
+    
+    body = await request.json()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(f"{agent_url}/watchlists", json=body, headers={"X-User-Id": user_id} if user_id else {})
+    
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+@app.get("/agents/{agent_id}/watchlists")
+async def proxy_list_watchlists(agent_id: str, request: Request):
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    
+    raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = _decode_token(raw) if raw else None
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{agent_url}/watchlists", headers={"X-User-Id": user_id} if user_id else {})
+        
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+@app.get("/agents/{agent_id}/watchlists/{watchlist_id}")
+async def proxy_get_watchlist(agent_id: str, watchlist_id: str, request: Request):
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    
+    raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = _decode_token(raw) if raw else None
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{agent_url}/watchlists/{watchlist_id}", headers={"X-User-Id": user_id} if user_id else {})
+        
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+@app.put("/agents/{agent_id}/watchlists/{watchlist_id}")
+async def proxy_update_watchlist(agent_id: str, watchlist_id: str, request: Request):
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    
+    raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = _decode_token(raw) if raw else None
+    
+    body = await request.json()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.put(f"{agent_url}/watchlists/{watchlist_id}", json=body, headers={"X-User-Id": user_id} if user_id else {})
+        
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+@app.delete("/agents/{agent_id}/watchlists/{watchlist_id}")
+async def proxy_delete_watchlist(agent_id: str, watchlist_id: str, request: Request):
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    
+    raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = _decode_token(raw) if raw else None
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.delete(f"{agent_url}/watchlists/{watchlist_id}", headers={"X-User-Id": user_id} if user_id else {})
+        
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return {"success": True}
 
 
 def _parse_error(resp) -> str:

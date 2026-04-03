@@ -21,7 +21,8 @@ class AgentCaller:
 
     async def call_agent(self, agent_url: str, query: str, session_id: str | None = None,
                    user_id: str | None = None, mode: str | None = None,
-                   request_id: str | None = None) -> str:
+                   request_id: str | None = None, watchlist_id: str | None = None,
+                   as_of_date: str | None = None) -> str:
         """
         Send a message/send request to an A2A agent and return the response text.
 
@@ -52,6 +53,8 @@ class AgentCaller:
                 "metadata": {
                     "user_id": user_id,
                     "mode": mode,
+                    "watchlist_id": watchlist_id,
+                    "as_of_date": as_of_date,
                 },
                 "acceptedOutputModes": ["text"],
             },
@@ -120,7 +123,9 @@ class AgentCaller:
                            response_format: str | None = None,
                            model_id: str | None = None,
                            user_id: str | None = None,
-                           request_id: str | None = None) -> AsyncIterator[str]:
+                           request_id: str | None = None,
+                           watchlist_id: str | None = None,
+                           as_of_date: str | None = None) -> AsyncIterator[str]:
         """
         Call an agent's /ask/stream SSE endpoint and yield text chunks.
 
@@ -134,6 +139,10 @@ class AgentCaller:
             payload["response_format"] = response_format
         if model_id:
             payload["model_id"] = model_id
+        if watchlist_id:
+            payload["watchlist_id"] = watchlist_id
+        if as_of_date:
+            payload["as_of_date"] = as_of_date
 
         headers: dict[str, str] = {}
         if user_id:
