@@ -32,8 +32,12 @@ def _users_collection():
         _auth_client = AsyncIOMotorClient(_MONGO_URI)
     return _auth_client["agent_auth"]["users"]
 
-_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", "change-me-in-production")
+_JWT_SECRET = os.getenv("AUTH_JWT_SECRET")
+if not _JWT_SECRET:
+    raise RuntimeError("AUTH_JWT_SECRET environment variable must be set for production security!")
+
 _JWT_ALGORITHM = "HS256"
+_INTERNAL_HEADERS = {"X-Internal-API-Key": os.getenv("INTERNAL_API_KEY")} if os.getenv("INTERNAL_API_KEY") else {}
 
 
 def _create_access_token(user_id: str) -> str:
@@ -388,7 +392,7 @@ async def proxy_upload(agent_id: str, upload_type: str, file: UploadFile = File(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
 
     file_bytes = await file.read()
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=120.0) as client:
         resp = await client.post(
             f"{agent_url}/upload/{upload_type}",
             files={"file": (file.filename, file_bytes, file.content_type)},
@@ -407,7 +411,7 @@ async def proxy_download(agent_id: str, file_id: str):
     if not agent_url:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=60.0) as client:
         resp = await client.get(f"{agent_url}/download/{file_id}")
 
     if resp.status_code >= 400:
@@ -427,7 +431,7 @@ async def proxy_list_files(agent_id: str, session_id: str):
     if not agent_url:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.get(f"{agent_url}/files/{session_id}")
 
     if resp.status_code >= 400:
@@ -442,7 +446,7 @@ async def proxy_charts(agent_id: str, ticker: str, request: Request):
     if not agent_url:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     params = dict(request.query_params)
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.get(f"{agent_url}/charts/{ticker}", params=params)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
@@ -461,7 +465,7 @@ async def proxy_create_watchlist(agent_id: str, request: Request):
     user_id = _decode_token(raw) if raw else None
     
     body = await request.json()
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.post(f"{agent_url}/watchlists", json=body, headers={"X-User-Id": user_id} if user_id else {})
     
     if resp.status_code >= 400:
@@ -477,7 +481,7 @@ async def proxy_list_watchlists(agent_id: str, request: Request):
     raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     user_id = _decode_token(raw) if raw else None
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.get(f"{agent_url}/watchlists", headers={"X-User-Id": user_id} if user_id else {})
         
     if resp.status_code >= 400:
@@ -493,7 +497,7 @@ async def proxy_get_watchlist(agent_id: str, watchlist_id: str, request: Request
     raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     user_id = _decode_token(raw) if raw else None
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.get(f"{agent_url}/watchlists/{watchlist_id}", headers={"X-User-Id": user_id} if user_id else {})
         
     if resp.status_code >= 400:
@@ -510,7 +514,7 @@ async def proxy_update_watchlist(agent_id: str, watchlist_id: str, request: Requ
     user_id = _decode_token(raw) if raw else None
     
     body = await request.json()
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.put(f"{agent_url}/watchlists/{watchlist_id}", json=body, headers={"X-User-Id": user_id} if user_id else {})
         
     if resp.status_code >= 400:
@@ -526,7 +530,7 @@ async def proxy_delete_watchlist(agent_id: str, watchlist_id: str, request: Requ
     raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     user_id = _decode_token(raw) if raw else None
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.delete(f"{agent_url}/watchlists/{watchlist_id}", headers={"X-User-Id": user_id} if user_id else {})
         
     if resp.status_code >= 400:
@@ -617,7 +621,7 @@ async def proxy_history(agent_id: str, http_request: Request):
     agent_url = registry.get_url(agent_id)
     if not agent_url:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.get(f"{agent_url}/history/user/me",
                                 headers={"X-User-Id": user_id})
     if resp.status_code >= 400:

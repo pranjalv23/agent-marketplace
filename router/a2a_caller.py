@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+import os
+
 logger = logging.getLogger("marketplace.a2a_caller")
 
 
@@ -64,6 +66,8 @@ class AgentCaller:
         headers: dict[str, str] = {}
         if request_id:
             headers["X-Request-ID"] = request_id
+        if internal_key := os.getenv("INTERNAL_API_KEY"):
+            headers["X-Internal-API-Key"] = internal_key
         logger.info("Calling A2A agent at %s — task_id='%s'", a2a_endpoint, task_id)
 
         _MAX_RETRIES = 3
@@ -149,6 +153,8 @@ class AgentCaller:
             headers["X-User-Id"] = user_id
         if request_id:
             headers["X-Request-ID"] = request_id
+        if internal_key := os.getenv("INTERNAL_API_KEY"):
+            headers["X-Internal-API-Key"] = internal_key
 
         logger.info("Streaming from %s — session='%s'", stream_url, session_id)
 
