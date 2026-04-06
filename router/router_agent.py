@@ -4,9 +4,9 @@ import os
 from langchain_openai import OpenAIEmbeddings
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger("marketplace.router")
+from agent_sdk.config import settings
 
-_MIN_ROUTING_CONFIDENCE = 0.25
+logger = logging.getLogger("marketplace.router")
 
 
 class LowConfidenceError(Exception):
@@ -16,7 +16,7 @@ class LowConfidenceError(Exception):
         self.best_agent = best_agent
         super().__init__(
             f"No agent matched with sufficient confidence "
-            f"(best: '{best_agent}' @ {best_score:.3f}, threshold: {_MIN_ROUTING_CONFIDENCE})"
+            f"(best: '{best_agent}' @ {best_score:.3f}, threshold: {settings.min_routing_confidence})"
         )
 
 
@@ -43,7 +43,11 @@ class EmbeddingRouter:
         self._agent_descriptions: dict[str, str] = {}
 
     async def build_index(self, cards: dict[str, dict]) -> None:
-        """Compute and cache embeddings for all agent descriptions + skills."""
+        """Compute and cache unit-vector embeddings for all agent descriptions + skills.
+
+        Unit vectors are precomputed so route() only needs a dot product (no norm
+        recomputation per query — eliminates O(n) redundant sqrt calls).
+        """
         self._agent_embeddings = {}
         self._agent_descriptions = {}
 
@@ -59,7 +63,9 @@ class EmbeddingRouter:
         embeddings = await self._embeddings.aembed_documents(texts)
 
         for agent_id, embedding in zip(agent_ids, embeddings):
-            self._agent_embeddings[agent_id] = embedding
+            # Store as unit vector — dot(unit_a, unit_b) == cosine_similarity(a, b)
+            norm = sum(x * x for x in embedding) ** 0.5
+            self._agent_embeddings[agent_id] = [x / norm for x in embedding] if norm > 0 else embedding
 
         logger.info("Built embedding index for %d agent(s)", len(self._agent_embeddings))
 
@@ -68,21 +74,25 @@ class EmbeddingRouter:
         if not self._agent_embeddings:
             raise ValueError("No agents indexed. Call build_index() first.")
 
-        query_embedding = await self._embeddings.aembed_query(query)
+        raw_query_embedding = await self._embeddings.aembed_query(query)
+        # Normalise query embedding to unit vector for pure dot-product similarity
+        qnorm = sum(x * x for x in raw_query_embedding) ** 0.5
+        query_embedding = [x / qnorm for x in raw_query_embedding] if qnorm > 0 else raw_query_embedding
 
         best_agent = None
         best_score = -1.0
 
-        for agent_id, agent_embedding in self._agent_embeddings.items():
-            score = self._cosine_similarity(query_embedding, agent_embedding)
+        for agent_id, agent_unit_vec in self._agent_embeddings.items():
+            # Dot product of two unit vectors equals their cosine similarity
+            score = sum(x * y for x, y in zip(query_embedding, agent_unit_vec))
             if score > best_score:
                 best_score = score
                 best_agent = agent_id
 
-        if best_score < _MIN_ROUTING_CONFIDENCE:
+        if best_score < settings.min_routing_confidence:
             logger.warning(
                 "Low-confidence routing: best agent='%s', score=%.3f (threshold=%.2f) — rejecting",
-                best_agent, best_score, _MIN_ROUTING_CONFIDENCE,
+                best_agent, best_score, settings.min_routing_confidence,
             )
             raise LowConfidenceError(best_score=best_score, best_agent=best_agent)
 

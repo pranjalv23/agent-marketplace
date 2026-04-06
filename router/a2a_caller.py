@@ -1,3 +1,11 @@
+# TECHNICAL DEBT (AR-1): This module uses two parallel transports:
+#   - A2A JSON-RPC message/send (non-streaming) for standard calls
+#   - Direct /ask/stream SSE (streaming) for real-time responses
+# The A2A protocol supports streaming via message/stream, which would unify these
+# into a single protocol. However, the python-a2a library's message/stream support
+# is not yet stable enough to migrate to safely. Once it matures, the direct
+# /ask/stream SSE path should be removed and all traffic routed via A2A.
+
 import asyncio
 import json
 import logging
@@ -7,6 +15,8 @@ from collections.abc import AsyncIterator
 import httpx
 
 import os
+
+from agent_sdk.config import settings
 
 logger = logging.getLogger("marketplace.a2a_caller")
 
@@ -70,7 +80,7 @@ class AgentCaller:
             headers["X-Internal-API-Key"] = internal_key
         logger.info("Calling A2A agent at %s — task_id='%s'", a2a_endpoint, task_id)
 
-        _MAX_RETRIES = 3
+        _MAX_RETRIES = settings.a2a_max_retries
         data = None
         for attempt in range(_MAX_RETRIES):
             try:

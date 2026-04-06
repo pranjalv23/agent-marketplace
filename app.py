@@ -1,5 +1,4 @@
 import hashlib
-import json
 import logging
 import os
 import uuid
@@ -55,6 +54,8 @@ def _hash_token(token: str) -> str:
 _JWT_SECRET = os.getenv("AUTH_JWT_SECRET")
 if not _JWT_SECRET:
     raise RuntimeError("AUTH_JWT_SECRET environment variable must be set for production security!")
+if len(_JWT_SECRET) < 32:
+    raise RuntimeError("AUTH_JWT_SECRET must be at least 32 characters for HS256 security (got %d)" % len(_JWT_SECRET))
 
 _JWT_ALGORITHM = "HS256"
 _INTERNAL_HEADERS = {"X-Internal-API-Key": os.getenv("INTERNAL_API_KEY")} if os.getenv("INTERNAL_API_KEY") else {}
@@ -98,22 +99,8 @@ from router.a2a_caller import AgentCaller
 
 load_dotenv()
 
-class _JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        doc = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "msg": record.getMessage(),
-        }
-        if record.exc_info:
-            doc["exc"] = self.formatException(record.exc_info)
-        return json.dumps(doc, ensure_ascii=False)
-
-_handler = logging.StreamHandler()
-_handler.setFormatter(_JsonFormatter())
-logging.root.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
-logging.root.addHandler(_handler)
+from agent_sdk.logging import configure_logging
+configure_logging("marketplace")
 logger = logging.getLogger("marketplace.api")
 
 
@@ -176,8 +163,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Internal-API-Key", "X-User-Id", "X-Request-ID"],
 )
 app.add_middleware(_RequestIDMiddleware)
 
