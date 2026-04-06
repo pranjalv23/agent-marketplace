@@ -1,0 +1,3 @@
+[submodule "agent-sdk"]
+	path = agent-sdk
+	url = https://github.com/agent-hub-org/agent-sdk.git
