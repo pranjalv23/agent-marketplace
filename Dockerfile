@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 RUN pip install --no-cache-dir poetry
 
 COPY pyproject.toml poetry.lock ./
+COPY agent-sdk/ ./agent-sdk/
 RUN poetry config virtualenvs.in-project true && \
     poetry install --only main --no-interaction --no-ansi
 

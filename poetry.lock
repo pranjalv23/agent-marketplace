@@ -40,7 +40,7 @@ optional = false
 python-versions = ">=3.13,<4.0"
 groups = ["main"]
 files = []
-develop = true
+develop = false
 
 [package.dependencies]
 fastapi = ">=0.135.1,<0.136.0"
@@ -3296,4 +3296,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4.0"
-content-hash = "b56ae4e29ecbe61aec7f3a934a519e3547d23c25c00c3b6acdecc0138be4ad1f"
+content-hash = "4d3ac1786ac4bb52e2ea991b422269b2896374077027ad761b0d5605cab379be"
