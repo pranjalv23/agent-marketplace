@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
-from jose import JWTError, jwt as _jwt
+from jose import JWTError, ExpiredSignatureError, jwt as _jwt
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -78,9 +78,17 @@ def _decode_token(token: str) -> str | None:
     try:
         payload = _jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
         if payload.get("type") != "access":
+            logger.warning("JWT type mismatch — expected 'access', got '%s'", payload.get("type"))
             return None
-        return payload.get("sub")
-    except JWTError:
+        sub = payload.get("sub")
+        if not sub:
+            logger.warning("JWT missing 'sub' claim")
+            return None
+        return sub
+    except ExpiredSignatureError:
+        return None  # expected; no log needed
+    except JWTError as e:
+        logger.warning("JWT decode error: %s", type(e).__name__)
         return None
 
 
@@ -172,6 +180,18 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "X-Internal-API-Key", "X-User-Id", "X-Request-ID"],
 )
 app.add_middleware(_RequestIDMiddleware)
+
+
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+app.add_middleware(_SecurityHeadersMiddleware)
 
 
 class QueryRequest(BaseModel):
@@ -704,6 +724,7 @@ async def logout(request: Request, body: LogoutRequest):
 
 
 @app.get("/agents/{agent_id}/history/me")
+@limiter.limit("60/minute")
 async def proxy_history(agent_id: str, http_request: Request):
     """Verify JWT here, then forward user_id to the agent via X-User-Id header."""
     raw = http_request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
@@ -716,6 +737,25 @@ async def proxy_history(agent_id: str, http_request: Request):
     async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
         resp = await client.get(f"{agent_url}/history/user/me",
                                 headers={"X-User-Id": user_id})
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
+class _SessionsBody(BaseModel):
+    session_ids: list[str]
+
+@app.post("/agents/{agent_id}/history/sessions")
+@limiter.limit("30/minute")
+async def proxy_history_sessions(agent_id: str, body: _SessionsBody, request: Request):
+    """Retrieve conversations for a list of client-known session IDs."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    # Validate session_ids: alphanumeric only, max 64 chars, capped at 20
+    safe_ids = [s for s in body.session_ids[:20] if isinstance(s, str) and s.isalnum() and len(s) <= 64]
+    async with httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=30.0) as client:
+        resp = await client.post(f"{agent_url}/history/sessions", json={"session_ids": safe_ids})
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     return resp.json()
