@@ -85,6 +85,17 @@ class AgentCaller:
         for attempt in range(_MAX_RETRIES):
             try:
                 response = await self._client.post(a2a_endpoint, json=payload, headers=headers)
+                if response.status_code == 429:
+                    # Special handling for rate limits: use the Retry-After header if present
+                    retry_after = response.headers.get("Retry-After")
+                    backoff = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
+                    logger.warning(
+                        "A2A call rate limited (attempt %d/%d) — retrying in %ds",
+                        attempt + 1, _MAX_RETRIES, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+
                 response.raise_for_status()
                 data = response.json()
                 break
@@ -98,7 +109,7 @@ class AgentCaller:
                 )
                 await asyncio.sleep(backoff)
             except httpx.HTTPStatusError as e:
-                if e.response.status_code < 500:
+                if e.response.status_code < 500 and e.response.status_code != 429:
                     raise
                 if attempt == _MAX_RETRIES - 1:
                     raise
