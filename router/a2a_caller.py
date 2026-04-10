@@ -1,10 +1,6 @@
-# TECHNICAL DEBT (AR-1): This module uses two parallel transports:
-#   - A2A JSON-RPC message/send (non-streaming) for standard calls
-#   - Direct /ask/stream SSE (streaming) for real-time responses
-# The A2A protocol supports streaming via message/stream, which would unify these
-# into a single protocol. However, the python-a2a library's message/stream support
-# is not yet stable enough to migrate to safely. Once it matures, the direct
-# /ask/stream SSE path should be removed and all traffic routed via A2A.
+# NOTE (AR-1 resolved): Streaming now uses A2A message/stream instead of
+# direct /ask/stream SSE. The marketplace checks agent capabilities and falls
+# back to message/send (non-streaming) if the agent doesn't support streaming.
 
 import asyncio
 import json

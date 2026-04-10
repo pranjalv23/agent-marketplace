@@ -341,20 +341,34 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
     raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     user_id = _decode_token(raw) if raw else None
 
+    agent_card = registry.get_card(agent_id)
+    supports_streaming = (
+        agent_card and agent_card.get("capabilities", {}).get("streaming", False)
+    )
+
     _request_id = request.state.request_id
+
     async def event_stream():
-        async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
-                                               response_format=body.response_format,
-                                               model_id=body.model_id,
-                                               user_id=user_id,
-                                               request_id=_request_id,
-                                               watchlist_id=body.watchlist_id,
-                                               as_of_date=body.as_of_date):
-            if chunk.startswith("__PROGRESS__:"):
-                phase = chunk[len("__PROGRESS__:"):]
-                yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
-            else:
-                yield f"data: {json.dumps({'text': chunk})}\n\n"
+        if supports_streaming:
+            async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
+                                                   response_format=body.response_format,
+                                                   model_id=body.model_id,
+                                                   user_id=user_id,
+                                                   request_id=_request_id,
+                                                   watchlist_id=body.watchlist_id,
+                                                   as_of_date=body.as_of_date):
+                if chunk.startswith("__PROGRESS__:"):
+                    phase = chunk[len("__PROGRESS__:"):]
+                    yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'text': chunk})}\n\n"
+        else:
+            response_text = await caller.call_agent(
+                agent_url, body.query, body.session_id, user_id=user_id,
+                request_id=_request_id,
+                watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
+            )
+            yield f"data: {json.dumps({'text': response_text})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -365,9 +379,8 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
 async def query_stream(body: QueryRequest, request: Request):
     """Route a query to the best agent and stream the response as SSE.
 
-    Uses the agent's /ask/stream endpoint directly for real-time streaming.
-    Each SSE event contains {"text": "..."} with a token chunk.
-    The stream ends with a [DONE] sentinel.
+    Checks if the agent supports A2A streaming (message/stream). Falls back
+    to non-streaming call_agent() if not, wrapping the response in SSE format.
     """
     logger.info("POST /query/stream — query='%s'", body.query[:100])
 
@@ -395,24 +408,37 @@ async def query_stream(body: QueryRequest, request: Request):
     raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     user_id = _decode_token(raw) if raw else None
 
+    agent_card = registry.get_card(decision.agent_name)
+    supports_streaming = (
+        agent_card and agent_card.get("capabilities", {}).get("streaming", False)
+    )
+
     _request_id = request.state.request_id
     async def event_stream():
         # Send routing metadata as the first event
         yield f"data: {json.dumps({'routed_to': decision.agent_name, 'reasoning': decision.reasoning})}\n\n"
 
-        # Proxy the agent's SSE stream
-        async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
-                                               response_format=body.response_format,
-                                               model_id=body.model_id,
-                                               user_id=user_id,
-                                               request_id=_request_id,
-                                               watchlist_id=body.watchlist_id,
-                                               as_of_date=body.as_of_date):
-            if chunk.startswith("__PROGRESS__:"):
-                phase = chunk[len("__PROGRESS__:"):]
-                yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
-            else:
-                yield f"data: {json.dumps({'text': chunk})}\n\n"
+        if supports_streaming:
+            async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
+                                                   response_format=body.response_format,
+                                                   model_id=body.model_id,
+                                                   user_id=user_id,
+                                                   request_id=_request_id,
+                                                   watchlist_id=body.watchlist_id,
+                                                   as_of_date=body.as_of_date):
+                if chunk.startswith("__PROGRESS__:"):
+                    phase = chunk[len("__PROGRESS__:"):]
+                    yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'text': chunk})}\n\n"
+        else:
+            response_text = await caller.call_agent(
+                agent_url, body.query, body.session_id, user_id=user_id,
+                mode=agent_card.get("metadata", {}).get("mode") if agent_card else None,
+                request_id=_request_id,
+                watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
+            )
+            yield f"data: {json.dumps({'text': response_text})}\n\n"
 
         yield "data: [DONE]\n\n"
 

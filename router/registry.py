@@ -97,6 +97,10 @@ class AgentRegistry:
     def get_cards(self) -> dict[str, dict]:
         return dict(self._cards)
 
+    def get_card(self, agent_id: str) -> dict | None:
+        """Get a single agent's card by ID."""
+        return self._cards.get(agent_id)
+
     def get_routing_context(self) -> str:
         """Format all agent descriptions + skills as text for the router LLM."""
         if not self._cards:
