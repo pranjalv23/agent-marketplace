@@ -152,61 +152,55 @@ class AgentCaller:
                            watchlist_id: str | None = None,
                            as_of_date: str | None = None) -> AsyncIterator[str]:
         """
-        Call an agent's /ask/stream SSE endpoint and yield text chunks.
-
-        This bypasses A2A for streaming — the agents expose /ask/stream which
-        returns SSE events with {"text": "..."} payloads.
+        Call an agent via the A2A protocol's message/stream method.
         """
         session_id = session_id or uuid.uuid4().hex
-        stream_url = f"{agent_url}/ask/stream"
-        payload = {"query": query, "session_id": session_id}
-        if response_format:
-            payload["response_format"] = response_format
-        if model_id:
-            payload["model_id"] = model_id
-        if watchlist_id:
-            payload["watchlist_id"] = watchlist_id
-        if as_of_date:
-            payload["as_of_date"] = as_of_date
+        a2a_endpoint = f"{agent_url}/a2a/"
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": uuid.uuid4().hex,
+            "method": "message/stream",
+            "params": {
+                "id": uuid.uuid4().hex,
+                "sessionId": session_id,
+                "message": {
+                    "messageId": uuid.uuid4().hex,
+                    "role": "user",
+                    "parts": [{"type": "text", "text": query}],
+                },
+                "metadata": {
+                    "user_id": user_id,
+                    "model_id": model_id,
+                    "watchlist_id": watchlist_id,
+                    "as_of_date": as_of_date,
+                },
+                "acceptedOutputModes": ["text"],
+            },
+        }
 
         headers: dict[str, str] = {}
-        if user_id:
-            headers["X-User-Id"] = user_id
         if request_id:
             headers["X-Request-ID"] = request_id
         if internal_key := os.getenv("INTERNAL_API_KEY"):
             headers["X-Internal-API-Key"] = internal_key
 
-        logger.info("Streaming from %s — session='%s'", stream_url, session_id)
+        logger.info("Streaming via A2A from %s — session='%s'", a2a_endpoint, session_id)
 
-        async with self._client.stream("POST", stream_url, json=payload, headers=headers) as response:
+        async with self._client.stream("POST", a2a_endpoint, json=payload, headers=headers) as response:
             response.raise_for_status()
-            current_event_type = "message"
             async for line in response.aiter_lines():
-                if line.startswith("event: "):
-                    current_event_type = line[7:].strip()
-                    continue
-                if line == "":
-                    current_event_type = "message"
-                    continue
                 if not line.startswith("data: "):
                     continue
-                data = line[6:]  # strip "data: " prefix
+                data = line[6:].strip()
                 if data == "[DONE]":
                     return
-                if current_event_type == "progress":
-                    try:
-                        parsed = json.loads(data)
-                        if "phase" in parsed:
-                            yield f"__PROGRESS__:{parsed['phase']}"
-                    except json.JSONDecodeError:
-                        pass
-                    current_event_type = "message"
-                    continue
                 try:
                     parsed = json.loads(data)
-                    if "text" in parsed:
+                    # A2A streaming typically wraps chunks in a 'text' field or similar
+                    if isinstance(parsed, dict) and "text" in parsed:
                         yield parsed["text"]
-                    # Skip session_id metadata — it's internal, not user-facing content
+                    elif isinstance(parsed, str):
+                        yield parsed
                 except json.JSONDecodeError:
-                    continue
+                    yield data
