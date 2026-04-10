@@ -193,10 +193,15 @@ class AgentCaller:
                     return
                 try:
                     parsed = json.loads(data)
-                    # A2A streaming typically wraps chunks in a 'text' field or similar
-                    if isinstance(parsed, dict) and "text" in parsed:
-                        yield parsed["text"]
-                    elif isinstance(parsed, str):
-                        yield parsed
+                    if not isinstance(parsed, dict):
+                        continue
+                    # A2A artifact-update event: extract text from parts
+                    if parsed.get("kind") == "artifact-update":
+                        for part in parsed.get("artifact", {}).get("parts", []):
+                            if part.get("kind") == "text" and part.get("text"):
+                                yield part["text"]
+                    # status-update with final=True signals stream end
+                    elif parsed.get("kind") == "status-update" and parsed.get("final"):
+                        return
                 except json.JSONDecodeError:
-                    yield data
+                    pass
