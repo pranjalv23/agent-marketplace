@@ -349,27 +349,38 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
     _request_id = request.state.request_id
 
     async def event_stream():
-        if supports_streaming:
-            async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
-                                                   response_format=body.response_format,
-                                                   model_id=body.model_id,
-                                                   user_id=user_id,
-                                                   request_id=_request_id,
-                                                   watchlist_id=body.watchlist_id,
-                                                   as_of_date=body.as_of_date):
-                if chunk.startswith("__PROGRESS__:"):
-                    phase = chunk[len("__PROGRESS__:"):]
-                    yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'text': chunk})}\n\n"
-        else:
-            response_text = await caller.call_agent(
-                agent_url, body.query, body.session_id, user_id=user_id,
-                request_id=_request_id,
-                watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
-            )
-            yield f"data: {json.dumps({'text': response_text})}\n\n"
-        yield "data: [DONE]\n\n"
+        try:
+            if supports_streaming:
+                async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
+                                                       response_format=body.response_format,
+                                                       model_id=body.model_id,
+                                                       user_id=user_id,
+                                                       request_id=_request_id,
+                                                       watchlist_id=body.watchlist_id,
+                                                       as_of_date=body.as_of_date):
+                    if chunk.startswith("__PROGRESS__:"):
+                        phase = chunk[len("__PROGRESS__:"):]
+                        yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
+                    elif chunk.startswith("__ERROR__:"):
+                        error_msg = chunk[len("__ERROR__:"):]
+                        yield f"event: error\ndata: {json.dumps({'message': error_msg})}\n\n"
+                        yield f"data: {json.dumps({'text': error_msg})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'text': chunk})}\n\n"
+            else:
+                response_text = await caller.call_agent(
+                    agent_url, body.query, body.session_id, user_id=user_id,
+                    request_id=_request_id,
+                    watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
+                )
+                yield f"data: {json.dumps({'text': response_text})}\n\n"
+        except Exception as e:
+            logger.error("Stream error for agent '%s': %s", agent_id, e, exc_info=True)
+            error_msg = "An error occurred while communicating with the agent. Please try again."
+            yield f"event: error\ndata: {json.dumps({'message': error_msg})}\n\n"
+            yield f"data: {json.dumps({'text': error_msg})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -418,29 +429,39 @@ async def query_stream(body: QueryRequest, request: Request):
         # Send routing metadata as the first event
         yield f"data: {json.dumps({'routed_to': decision.agent_name, 'reasoning': decision.reasoning})}\n\n"
 
-        if supports_streaming:
-            async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
-                                                   response_format=body.response_format,
-                                                   model_id=body.model_id,
-                                                   user_id=user_id,
-                                                   request_id=_request_id,
-                                                   watchlist_id=body.watchlist_id,
-                                                   as_of_date=body.as_of_date):
-                if chunk.startswith("__PROGRESS__:"):
-                    phase = chunk[len("__PROGRESS__:"):]
-                    yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'text': chunk})}\n\n"
-        else:
-            response_text = await caller.call_agent(
-                agent_url, body.query, body.session_id, user_id=user_id,
-                mode=agent_card.get("metadata", {}).get("mode") if agent_card else None,
-                request_id=_request_id,
-                watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
-            )
-            yield f"data: {json.dumps({'text': response_text})}\n\n"
-
-        yield "data: [DONE]\n\n"
+        try:
+            if supports_streaming:
+                async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
+                                                       response_format=body.response_format,
+                                                       model_id=body.model_id,
+                                                       user_id=user_id,
+                                                       request_id=_request_id,
+                                                       watchlist_id=body.watchlist_id,
+                                                       as_of_date=body.as_of_date):
+                    if chunk.startswith("__PROGRESS__:"):
+                        phase = chunk[len("__PROGRESS__:"):]
+                        yield f"event: progress\ndata: {json.dumps({'phase': phase})}\n\n"
+                    elif chunk.startswith("__ERROR__:"):
+                        error_msg = chunk[len("__ERROR__:"):]
+                        yield f"event: error\ndata: {json.dumps({'message': error_msg})}\n\n"
+                        yield f"data: {json.dumps({'text': error_msg})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'text': chunk})}\n\n"
+            else:
+                response_text = await caller.call_agent(
+                    agent_url, body.query, body.session_id, user_id=user_id,
+                    mode=agent_card.get("metadata", {}).get("mode") if agent_card else None,
+                    request_id=_request_id,
+                    watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
+                )
+                yield f"data: {json.dumps({'text': response_text})}\n\n"
+        except Exception as e:
+            logger.error("Stream error for agent '%s': %s", decision.agent_name, e, exc_info=True)
+            error_msg = "An error occurred while communicating with the agent. Please try again."
+            yield f"event: error\ndata: {json.dumps({'message': error_msg})}\n\n"
+            yield f"data: {json.dumps({'text': error_msg})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

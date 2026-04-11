@@ -200,8 +200,18 @@ class AgentCaller:
                         for part in parsed.get("artifact", {}).get("parts", []):
                             if part.get("kind") == "text" and part.get("text"):
                                 yield part["text"]
-                    # status-update with final=True signals stream end
-                    elif parsed.get("kind") == "status-update" and parsed.get("final"):
-                        return
+                    # status-update: handle failed or final states
+                    elif parsed.get("kind") == "status-update":
+                        status = parsed.get("status", {})
+                        state = status.get("state") if isinstance(status, dict) else None
+                        if state == "failed":
+                            error_msg = "The agent failed to process your request. Please try again."
+                            msg_obj = status.get("message", {})
+                            if isinstance(msg_obj, dict) and msg_obj.get("text"):
+                                error_msg = msg_obj["text"]
+                            yield f"__ERROR__:{error_msg}"
+                            return
+                        elif parsed.get("final"):
+                            return
                 except json.JSONDecodeError:
                     pass
