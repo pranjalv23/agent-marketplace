@@ -30,24 +30,12 @@ _auth_client: AsyncIOMotorClient | None = None
 
 
 def _users_collection():
-    global _auth_client
-    if _auth_client is None:
-        _auth_client = AsyncIOMotorClient(
-            _MONGO_URI,
-            serverSelectionTimeoutMS=5000,
-            socketTimeoutMS=30000,
-        )
+    assert _auth_client is not None, "MongoDB auth client not initialised — lifespan not started"
     return _auth_client["agent_auth"]["users"]
 
 
 def _refresh_tokens_collection():
-    global _auth_client
-    if _auth_client is None:
-        _auth_client = AsyncIOMotorClient(
-            _MONGO_URI,
-            serverSelectionTimeoutMS=5000,
-            socketTimeoutMS=30000,
-        )
+    assert _auth_client is not None, "MongoDB auth client not initialised — lifespan not started"
     return _auth_client["agent_auth"]["refresh_tokens"]
 
 
@@ -164,7 +152,12 @@ _proxy_client: httpx.AsyncClient | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _proxy_client
+    global _proxy_client, _auth_client
+    _auth_client = AsyncIOMotorClient(
+        _MONGO_URI,
+        serverSelectionTimeoutMS=5000,
+        socketTimeoutMS=30000,
+    )
     _proxy_client = httpx.AsyncClient(headers=_INTERNAL_HEADERS, timeout=120.0)
     await _users_collection().create_index("email", unique=True)
     await _refresh_tokens_collection().create_index("token_hash", unique=True)
@@ -175,6 +168,7 @@ async def lifespan(app: FastAPI):
     yield
     await caller.close()
     await _proxy_client.aclose()
+    _auth_client.close()
     logger.info("Marketplace shutdown")
 
 
@@ -834,10 +828,11 @@ async def register(request: Request, body: RegisterRequest):
     if await col.find_one({"email": email}):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     user_id = uuid.uuid4().hex
+    password_hash = (await asyncio.to_thread(bcrypt.hashpw, body.password.encode(), bcrypt.gensalt())).decode()
     await col.insert_one({
         "user_id": user_id,
         "email": email,
-        "password_hash": bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode(),
+        "password_hash": password_hash,
         "created_at": datetime.now(timezone.utc),
     })
     refresh = _create_refresh_token(user_id)
@@ -856,7 +851,9 @@ async def register(request: Request, body: RegisterRequest):
 async def login(request: Request, body: LoginRequest):
     col = _users_collection()
     user = await col.find_one({"email": body.email.lower().strip()}, {"_id": 0})
-    if not user or not bcrypt.checkpw(body.password.encode(), user["password_hash"].encode()):
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+    if not await asyncio.to_thread(bcrypt.checkpw, body.password.encode(), user["password_hash"].encode()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     refresh = _create_refresh_token(user["user_id"])
     await _store_refresh_token(user["user_id"], refresh)

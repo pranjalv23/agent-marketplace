@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import os
-import time
 
+from cachetools import TTLCache
 from langchain_openai import OpenAIEmbeddings
 from pydantic import BaseModel, Field
 
@@ -10,21 +11,10 @@ from agent_sdk.config import settings
 logger = logging.getLogger("marketplace.router")
 
 # In-process TTL cache for query embeddings.
-# Key: query string, Value: (unit_vector, expiry_timestamp)
-_embed_cache: dict[str, tuple[list[float], float]] = {}
-_EMBED_CACHE_TTL = 600  # 10 minutes
-_EMBED_CACHE_MAX = 512
+# TTLCache provides O(1) LRU eviction — no manual key iteration needed.
+_embed_cache: TTLCache = TTLCache(maxsize=512, ttl=600)
 
-
-def _embed_cache_evict() -> None:
-    now = time.monotonic()
-    expired = [k for k, (_, exp) in _embed_cache.items() if exp <= now]
-    for k in expired:
-        del _embed_cache[k]
-    if len(_embed_cache) >= _EMBED_CACHE_MAX:
-        overage = len(_embed_cache) - _EMBED_CACHE_MAX + 1
-        for k in list(_embed_cache.keys())[:overage]:
-            del _embed_cache[k]
+_EMBED_TIMEOUT = 10.0  # seconds before Azure embedding call is abandoned
 
 
 class LowConfidenceError(Exception):
@@ -97,17 +87,18 @@ class EmbeddingRouter:
         if not self._agent_embeddings:
             raise ValueError("No agents indexed. Call build_index() first.")
 
-        now = time.monotonic()
         cached = _embed_cache.get(query)
-        if cached is not None and now < cached[1]:
-            query_embedding = cached[0]
+        if cached is not None:
+            query_embedding = cached
             logger.debug("Embedding cache hit for query (%.60s…)", query)
         else:
-            raw_query_embedding = await self._get_embeddings().aembed_query(query)
+            raw_query_embedding = await asyncio.wait_for(
+                self._get_embeddings().aembed_query(query),
+                timeout=_EMBED_TIMEOUT,
+            )
             qnorm = sum(x * x for x in raw_query_embedding) ** 0.5
             query_embedding = [x / qnorm for x in raw_query_embedding] if qnorm > 0 else raw_query_embedding
-            _embed_cache_evict()
-            _embed_cache[query] = (query_embedding, now + _EMBED_CACHE_TTL)
+            _embed_cache[query] = query_embedding
 
         best_agent = None
         best_score = -1.0

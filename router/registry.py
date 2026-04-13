@@ -95,7 +95,7 @@ class AgentRegistry:
         return True
 
     def get_cards(self) -> dict[str, dict]:
-        return dict(self._cards)
+        return self._cards
 
     def get_card(self, agent_id: str) -> dict | None:
         """Get a single agent's card by ID."""
