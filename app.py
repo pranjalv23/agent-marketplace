@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -924,6 +925,9 @@ async def proxy_history(agent_id: str, request: Request):
     return resp.json()
 
 
+_SAFE_SESSION_RE = re.compile(r'^[a-zA-Z0-9\-]{1,64}$')
+
+
 class _SessionsBody(BaseModel):
     session_ids: list[str]
 
@@ -934,8 +938,8 @@ async def proxy_history_sessions(agent_id: str, body: _SessionsBody, request: Re
     agent_url = registry.get_url(agent_id)
     if not agent_url:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    # Validate session_ids: alphanumeric only, max 64 chars, capped at 20
-    safe_ids = [s for s in body.session_ids[:20] if isinstance(s, str) and s.isalnum() and len(s) <= 64]
+    # Validate session_ids: alphanumeric + hyphens (UUID format), max 64 chars, capped at 20
+    safe_ids = [s for s in body.session_ids[:20] if isinstance(s, str) and _SAFE_SESSION_RE.match(s)]
     resp = await _proxy_client.post(
         f"{agent_url}/history/sessions",
         json={"session_ids": safe_ids},
