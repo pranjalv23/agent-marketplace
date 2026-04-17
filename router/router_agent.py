@@ -28,10 +28,14 @@ class LowConfidenceError(Exception):
         )
 
 
+_SOFT_ROUTING_CONFIDENCE = 0.30  # route with low-confidence flag above this; reject below
+
+
 class RoutingDecision(BaseModel):
     """Structured output for routing decisions."""
     agent_name: str = Field(description="The agent_id to route the query to")
     reasoning: str = Field(description="Brief explanation of why this agent was chosen")
+    confidence: float = Field(default=1.0, description="Cosine similarity score (0–1)")
 
 
 class EmbeddingRouter:
@@ -110,10 +114,10 @@ class EmbeddingRouter:
                 best_score = score
                 best_agent = agent_id
 
-        if best_score < settings.min_routing_confidence:
+        if best_score < _SOFT_ROUTING_CONFIDENCE:
             logger.warning(
-                "Low-confidence routing: best agent='%s', score=%.3f (threshold=%.2f) — rejecting",
-                best_agent, best_score, settings.min_routing_confidence,
+                "Very low confidence routing: best agent='%s', score=%.3f — rejecting",
+                best_agent, best_score,
             )
             raise LowConfidenceError(best_score=best_score, best_agent=best_agent)
 
@@ -121,8 +125,17 @@ class EmbeddingRouter:
             f"Matched '{best_agent}' with similarity {best_score:.3f} "
             f"(description: '{self._agent_descriptions[best_agent][:80]}...')"
         )
-        logger.info("Routing decision: agent='%s', score=%.3f", best_agent, best_score)
-        return RoutingDecision(agent_name=best_agent, reasoning=reasoning)
+        if best_score < settings.min_routing_confidence:
+            reasoning += (
+                f" [low confidence — best guess, consider rephrasing if result is off-topic]"
+            )
+            logger.info(
+                "Soft routing: agent='%s', score=%.3f (below threshold %.2f but above soft floor %.2f)",
+                best_agent, best_score, settings.min_routing_confidence, _SOFT_ROUTING_CONFIDENCE,
+            )
+        else:
+            logger.info("Routing decision: agent='%s', score=%.3f", best_agent, best_score)
+        return RoutingDecision(agent_name=best_agent, reasoning=reasoning, confidence=best_score)
 
     @staticmethod
     def _card_to_text(agent_id: str, card: dict) -> str:

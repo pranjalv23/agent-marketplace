@@ -239,6 +239,8 @@ class QueryResponse(BaseModel):
     routed_to: str
     reasoning: str
     response: str
+    routing_confidence: float | None = None
+    low_confidence: bool = False
 
 
 class DirectQueryRequest(BaseModel):
@@ -311,11 +313,15 @@ async def query(request: Request, body: QueryRequest):
         watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
     )
 
+    from agent_sdk.config import settings as sdk_settings
+    is_low_confidence = decision.confidence < sdk_settings.min_routing_confidence
     return QueryResponse(
         query=body.query,
         routed_to=decision.agent_name,
         reasoning=decision.reasoning,
         response=response_text,
+        routing_confidence=decision.confidence,
+        low_confidence=is_low_confidence,
     )
 
 
@@ -482,6 +488,9 @@ async def query_stream(body: QueryRequest, request: Request):
         agent_card and agent_card.get("capabilities", {}).get("streaming", False)
     )
 
+    from agent_sdk.config import settings as sdk_settings
+    _is_low_confidence = decision.confidence < sdk_settings.min_routing_confidence
+
     _request_id = request.state.request_id
     async def event_stream():
         queue = asyncio.Queue()
@@ -521,7 +530,7 @@ async def query_stream(body: QueryRequest, request: Request):
                 await queue.put(None)
 
         # Send routing metadata as the first event directly
-        yield f"data: {json.dumps({'routed_to': decision.agent_name, 'reasoning': decision.reasoning})}\n\n"
+        yield f"data: {json.dumps({'routed_to': decision.agent_name, 'reasoning': decision.reasoning, 'routing_confidence': decision.confidence, 'low_confidence': _is_low_confidence})}\n\n"
 
         heartbeat_task = asyncio.create_task(heartbeat_worker())
         agent_task = asyncio.create_task(agent_worker())
