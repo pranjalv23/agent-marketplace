@@ -560,6 +560,25 @@ async def query_stream(body: QueryRequest, request: Request):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@app.get("/agents/status")
+async def agents_status():
+    """Fan out /health checks to all registered agents and return their status."""
+    async def _check(agent_id: str, base_url: str):
+        t0 = asyncio.get_event_loop().time()
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as c:
+                r = await c.get(f"{base_url}/health", headers=_INTERNAL_HEADERS)
+            latency_ms = round((asyncio.get_event_loop().time() - t0) * 1000)
+            if r.is_success:
+                return agent_id, {"status": "ok", "latencyMs": latency_ms}
+            return agent_id, {"status": "error", "latencyMs": latency_ms}
+        except Exception:
+            return agent_id, {"status": "error", "latencyMs": None}
+
+    results = await asyncio.gather(*[_check(aid, url) for aid, url in AGENT_URLS.items()])
+    return dict(results)
+
+
 @app.get("/agents")
 async def list_agents():
     """List all registered agents with their Agent Cards."""
