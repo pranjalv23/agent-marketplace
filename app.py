@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import uvicorn
+from cachetools import TTLCache
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -146,6 +147,9 @@ registry = AgentRegistry(AGENT_URLS)
 router = EmbeddingRouter()
 caller = AgentCaller()
 
+# Cache routing decisions for 1 hour to eliminate redundant LLM/embedding overhead
+_routing_cache = TTLCache(maxsize=1000, ttl=3600)
+
 # Persistent proxy client — reused across all proxy endpoints to avoid TCP/TLS
 # handshake overhead on every request. Initialized in lifespan, closed on shutdown.
 _proxy_client: httpx.AsyncClient | None = None
@@ -261,16 +265,25 @@ async def query(request: Request, body: QueryRequest):
     if not registry.get_cards():
         raise HTTPException(status_code=503, detail="No agents available. Try POST /agents/refresh.")
 
-    try:
-        decision = await router.route(body.query)
-    except LowConfidenceError as e:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Your query doesn't clearly match any available agent (best match: '{e.best_agent}', "
-                f"confidence: {e.best_score:.2f}). Try rephrasing or be more specific."
-            ),
-        )
+    # Check cache first to avoid LLM embedding latency
+    normalized_query = body.query.strip().lower()
+    decision = _routing_cache.get(normalized_query)
+
+    if decision:
+        logger.info("Routing cache hit for query — routed to '%s'", decision.agent_name)
+    else:
+        try:
+            decision = await router.route(body.query)
+            _routing_cache[normalized_query] = decision
+        except LowConfidenceError as e:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Your query doesn't clearly match any available agent (best match: '{e.best_agent}', "
+                    f"confidence: {e.best_score:.2f}). Try rephrasing or be more specific."
+                ),
+            )
+
 
     user_id = request.state.user_id
 
