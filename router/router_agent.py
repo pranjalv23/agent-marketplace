@@ -49,6 +49,7 @@ class EmbeddingRouter:
         self._embeddings: OpenAIEmbeddings | None = None
         self._agent_embeddings: dict[str, list[float]] = {}
         self._agent_descriptions: dict[str, str] = {}
+        self._routing_cache: TTLCache = TTLCache(maxsize=1000, ttl=3600)
 
     def _get_embeddings(self) -> OpenAIEmbeddings:
         if self._embeddings is None:
@@ -136,6 +137,23 @@ class EmbeddingRouter:
         else:
             logger.info("Routing decision: agent='%s', score=%.3f", best_agent, best_score)
         return RoutingDecision(agent_name=best_agent, reasoning=reasoning, confidence=best_score)
+
+    async def route_with_cache(self, query: str) -> RoutingDecision:
+        """route() with in-process TTL cache to skip redundant embedding calls."""
+        normalized = query.strip().lower()
+        cached = self._routing_cache.get(normalized)
+        if cached is not None:
+            logger.debug("Routing cache hit — routed to '%s'", cached.agent_name)
+            return cached
+        decision = await self.route(query)
+        self._routing_cache[normalized] = decision
+        return decision
+
+    def clear_routing_cache(self) -> None:
+        """Invalidate all cached routing decisions. Call after registry changes."""
+        self._routing_cache.clear()
+        _embed_cache.clear()
+        logger.info("Routing and embedding caches cleared")
 
     @staticmethod
     def _card_to_text(agent_id: str, card: dict) -> str:

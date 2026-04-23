@@ -211,11 +211,14 @@ class AgentCaller:
                         status = result_obj.get("status", {})
                         state = status.get("state") if isinstance(status, dict) else None
                         if state == "failed":
-                            error_msg = "The agent failed to process your request. Please try again."
+                            generic_error = "The agent failed to process your request. Please try again."
                             msg_obj = status.get("message", {})
                             if isinstance(msg_obj, dict) and msg_obj.get("text"):
-                                error_msg = msg_obj["text"]
-                            yield f"__ERROR__:{error_msg}"
+                                logger.warning(
+                                    "Agent task failed — raw error (suppressed for client): %s",
+                                    msg_obj["text"],
+                                )
+                            yield f"__ERROR__:{generic_error}"
                             return
                         elif result_obj.get("final"):
                             return

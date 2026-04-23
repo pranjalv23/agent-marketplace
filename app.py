@@ -10,11 +10,10 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import uvicorn
-from cachetools import TTLCache
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jose import JWTError, ExpiredSignatureError, jwt as _jwt
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
@@ -113,8 +112,11 @@ class _JWTDecodeMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request, call_next):
-        raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-        request.state.user_id = _decode_token(raw) if raw else None
+        token = request.cookies.get("access_token")
+        if not token:
+            raw = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            token = raw or None
+        request.state.user_id = _decode_token(token) if token else None
         return await call_next(request)
 
 
@@ -146,9 +148,6 @@ class _RequestIDMiddleware(BaseHTTPMiddleware):
 registry = AgentRegistry(AGENT_URLS)
 router = EmbeddingRouter()
 caller = AgentCaller()
-
-# Cache routing decisions for 1 hour to eliminate redundant LLM/embedding overhead
-_routing_cache = TTLCache(maxsize=1000, ttl=3600)
 
 # Persistent proxy client — reused across all proxy endpoints to avoid TCP/TLS
 # handshake overhead on every request. Initialized in lifespan, closed on shutdown.
@@ -267,24 +266,16 @@ async def query(request: Request, body: QueryRequest):
     if not registry.get_cards():
         raise HTTPException(status_code=503, detail="No agents available. Try POST /agents/refresh.")
 
-    # Check cache first to avoid LLM embedding latency
-    normalized_query = body.query.strip().lower()
-    decision = _routing_cache.get(normalized_query)
-
-    if decision:
-        logger.info("Routing cache hit for query — routed to '%s'", decision.agent_name)
-    else:
-        try:
-            decision = await router.route(body.query)
-            _routing_cache[normalized_query] = decision
-        except LowConfidenceError as e:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Your query doesn't clearly match any available agent (best match: '{e.best_agent}', "
-                    f"confidence: {e.best_score:.2f}). Try rephrasing or be more specific."
-                ),
-            )
+    try:
+        decision = await router.route_with_cache(body.query)
+    except LowConfidenceError as e:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Your query doesn't clearly match any available agent (best match: '{e.best_agent}', "
+                f"confidence: {e.best_score:.2f}). Try rephrasing or be more specific."
+            ),
+        )
 
 
     user_id = request.state.user_id
@@ -387,7 +378,7 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
     _request_id = request.state.request_id
 
     async def event_stream():
-        queue = asyncio.Queue()
+        queue = asyncio.Queue(maxsize=100)
         _HEARTBEAT_INTERVAL = 15.0
 
         async def heartbeat_worker():
@@ -408,7 +399,11 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
                                                            request_id=_request_id,
                                                            watchlist_id=body.watchlist_id,
                                                            as_of_date=body.as_of_date):
-                        await queue.put(chunk)
+                        try:
+                            await asyncio.wait_for(queue.put(chunk), timeout=30.0)
+                        except asyncio.TimeoutError:
+                            logger.warning("Stream queue full for agent '%s' — client likely disconnected", agent_id)
+                            return
                 else:
                     response_text = await caller.call_agent(
                         agent_url, body.query, body.session_id, user_id=user_id,
@@ -420,7 +415,10 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
                 logger.error("Stream error for agent '%s': %s", agent_id, e, exc_info=True)
                 await queue.put("__ERROR__:An error occurred while communicating with the agent. Please try again.")
             finally:
-                await queue.put(None)
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         heartbeat_task = asyncio.create_task(heartbeat_worker())
         agent_task = asyncio.create_task(agent_worker())
@@ -444,7 +442,11 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
                     yield f"data: {json.dumps({'text': chunk})}\n\n"
         finally:
             heartbeat_task.cancel()
-            await agent_task
+            agent_task.cancel()
+            try:
+                await agent_task
+            except asyncio.CancelledError:
+                pass
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -493,7 +495,7 @@ async def query_stream(body: QueryRequest, request: Request):
 
     _request_id = request.state.request_id
     async def event_stream():
-        queue = asyncio.Queue()
+        queue = asyncio.Queue(maxsize=100)
         _HEARTBEAT_INTERVAL = 15.0
 
         async def heartbeat_worker():
@@ -514,7 +516,11 @@ async def query_stream(body: QueryRequest, request: Request):
                                                            request_id=_request_id,
                                                            watchlist_id=body.watchlist_id,
                                                            as_of_date=body.as_of_date):
-                        await queue.put(chunk)
+                        try:
+                            await asyncio.wait_for(queue.put(chunk), timeout=30.0)
+                        except asyncio.TimeoutError:
+                            logger.warning("Stream queue full for agent '%s' — client likely disconnected", decision.agent_name)
+                            return
                 else:
                     response_text = await caller.call_agent(
                         agent_url, body.query, body.session_id, user_id=user_id,
@@ -527,7 +533,10 @@ async def query_stream(body: QueryRequest, request: Request):
                 logger.error("Stream error for agent '%s': %s", decision.agent_name, e, exc_info=True)
                 await queue.put("__ERROR__:An error occurred while communicating with the agent. Please try again.")
             finally:
-                await queue.put(None)
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         # Send routing metadata as the first event directly
         yield f"data: {json.dumps({'routed_to': decision.agent_name, 'reasoning': decision.reasoning, 'routing_confidence': decision.confidence, 'low_confidence': _is_low_confidence})}\n\n"
@@ -554,7 +563,11 @@ async def query_stream(body: QueryRequest, request: Request):
                     yield f"data: {json.dumps({'text': chunk})}\n\n"
         finally:
             heartbeat_task.cancel()
-            await agent_task
+            agent_task.cancel()
+            try:
+                await agent_task
+            except asyncio.CancelledError:
+                pass
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -595,6 +608,8 @@ async def refresh_agents():
     cards = registry.get_cards()
     if changed:
         await router.build_index(cards)
+        router.clear_routing_cache()
+        logger.info("Agent registry changed — routing and embedding caches cleared")
     return {
         "status": "refreshed" if changed else "no_change",
         "agents_available": len(cards),
@@ -926,6 +941,21 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    """Attach httpOnly auth cookies to a response."""
+    is_secure = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+    response.set_cookie(
+        key="access_token", value=access_token,
+        httponly=True, secure=is_secure, samesite="strict",
+        max_age=3600, path="/",
+    )
+    response.set_cookie(
+        key="refresh_token", value=refresh_token,
+        httponly=True, secure=is_secure, samesite="strict",
+        max_age=7 * 24 * 3600, path="/auth/refresh",
+    )
+
+
 async def _store_refresh_token(user_id: str, token: str) -> None:
     """Persist a hashed refresh token so it can be rotated and revoked."""
     expire = datetime.now(timezone.utc) + timedelta(days=7)
@@ -957,15 +987,19 @@ async def register(request: Request, body: RegisterRequest):
         "password_hash": password_hash,
         "created_at": datetime.now(timezone.utc),
     })
+    access = _create_access_token(user_id)
     refresh = _create_refresh_token(user_id)
     await _store_refresh_token(user_id, refresh)
     logger.info("Registered user email='%s'", email)
-    return {
+    response = JSONResponse(content={
         "user_id": user_id,
         "email": email,
-        "token": _create_access_token(user_id),
+        "token": access,
         "refresh_token": refresh,
-    }
+        "token_issued_at": int(datetime.now(timezone.utc).timestamp() * 1000),
+    })
+    _set_auth_cookies(response, access, refresh)
+    return response
 
 
 @app.post("/auth/login")
@@ -977,15 +1011,19 @@ async def login(request: Request, body: LoginRequest):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     if not await asyncio.to_thread(bcrypt.checkpw, body.password.encode(), user["password_hash"].encode()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+    access = _create_access_token(user["user_id"])
     refresh = _create_refresh_token(user["user_id"])
     await _store_refresh_token(user["user_id"], refresh)
     logger.info("Login user='%s'", user["user_id"])
-    return {
+    response = JSONResponse(content={
         "user_id": user["user_id"],
         "email": user["email"],
-        "token": _create_access_token(user["user_id"]),
+        "token": access,
         "refresh_token": refresh,
-    }
+        "token_issued_at": int(datetime.now(timezone.utc).timestamp() * 1000),
+    })
+    _set_auth_cookies(response, access, refresh)
+    return response
 
 
 class RefreshRequest(BaseModel):
@@ -993,37 +1031,62 @@ class RefreshRequest(BaseModel):
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 @app.post("/auth/refresh")
 @limiter.limit("20/minute")
-async def refresh_token_endpoint(request: Request, body: RefreshRequest):
-    user_id = _decode_refresh_token(body.refresh_token)
+async def refresh_token_endpoint(request: Request, body: RefreshRequest | None = None):
+    refresh_token_value = (
+        request.cookies.get("refresh_token")
+        or (body.refresh_token if body else None)
+    )
+    if not refresh_token_value:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token provided")
+    user_id = _decode_refresh_token(refresh_token_value)
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
-    existed = await _revoke_refresh_token(body.refresh_token)
+    existed = await _revoke_refresh_token(refresh_token_value)
     if not existed:
         # Token was not in DB — either already used (replay) or from before rotation was added
         logger.warning("Refresh token not found in DB for user='%s' — possible replay attack", user_id)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token already used or revoked")
     new_refresh = _create_refresh_token(user_id)
+    new_access = _create_access_token(user_id)
     await _store_refresh_token(user_id, new_refresh)
     logger.info("Token rotated for user='%s'", user_id)
-    return {
-        "token": _create_access_token(user_id),
+    response = JSONResponse(content={
+        "token": new_access,
         "refresh_token": new_refresh,
-    }
+        "token_issued_at": int(datetime.now(timezone.utc).timestamp() * 1000),
+    })
+    _set_auth_cookies(response, new_access, new_refresh)
+    return response
 
 
 @app.post("/auth/logout")
-async def logout(request: Request, body: LogoutRequest):
+async def logout(request: Request, body: LogoutRequest | None = None):
     """Revoke the refresh token so it cannot be reused after logout."""
-    user_id = _decode_refresh_token(body.refresh_token)
-    if user_id:
-        await _revoke_refresh_token(body.refresh_token)
-        logger.info("Logout — refresh token revoked for user='%s'", user_id)
-    return {"status": "logged_out"}
+    refresh_token_value = (
+        request.cookies.get("refresh_token")
+        or (body.refresh_token if body else None)
+    )
+    if refresh_token_value:
+        user_id = _decode_refresh_token(refresh_token_value)
+        if user_id:
+            revoked = await _revoke_refresh_token(refresh_token_value)
+            if revoked:
+                logger.info("Logout — refresh token revoked for user='%s'", user_id)
+            else:
+                logger.warning(
+                    "Logout — refresh token not found in DB for user='%s' (already revoked or expired)", user_id
+                )
+        else:
+            logger.warning("Logout called with invalid or expired refresh token")
+    response = JSONResponse(content={"status": "logged_out"})
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/auth/refresh")
+    return response
 
 
 @app.get("/agents/{agent_id}/history/me")
