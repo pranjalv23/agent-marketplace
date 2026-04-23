@@ -247,6 +247,7 @@ class DirectQueryRequest(BaseModel):
     session_id: str | None = None
     response_format: str | None = None
     model_id: str | None = None
+    mode: str | None = None
     watchlist_id: str | None = None
     as_of_date: str | None = None
 
@@ -395,6 +396,7 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
                     async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
                                                            response_format=body.response_format,
                                                            model_id=body.model_id,
+                                                           mode=body.mode,
                                                            user_id=user_id,
                                                            request_id=_request_id,
                                                            watchlist_id=body.watchlist_id,
@@ -407,6 +409,7 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
                 else:
                     response_text = await caller.call_agent(
                         agent_url, body.query, body.session_id, user_id=user_id,
+                        mode=body.mode,
                         request_id=_request_id,
                         watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
                     )
@@ -508,10 +511,14 @@ async def query_stream(body: QueryRequest, request: Request):
 
         async def agent_worker():
             try:
+                # Auto-resolve mode from agent card if the client didn't specify one
+                _mode = (body.mode if hasattr(body, "mode") and body.mode
+                         else (agent_card.get("metadata", {}).get("mode") if agent_card else None))
                 if supports_streaming:
                     async for chunk in caller.stream_agent(agent_url, body.query, body.session_id,
                                                            response_format=body.response_format,
                                                            model_id=body.model_id,
+                                                           mode=_mode,
                                                            user_id=user_id,
                                                            request_id=_request_id,
                                                            watchlist_id=body.watchlist_id,
@@ -524,7 +531,7 @@ async def query_stream(body: QueryRequest, request: Request):
                 else:
                     response_text = await caller.call_agent(
                         agent_url, body.query, body.session_id, user_id=user_id,
-                        mode=agent_card.get("metadata", {}).get("mode") if agent_card else None,
+                        mode=_mode,
                         request_id=_request_id,
                         watchlist_id=body.watchlist_id, as_of_date=body.as_of_date,
                     )
@@ -1174,6 +1181,46 @@ async def proxy_get_nutrition(agent_id: str, request: Request):
     return resp.json()
 
 
+@app.post("/agents/{agent_id}/progress")
+async def proxy_log_progress(agent_id: str, request: Request):
+    """Proxy a progress log entry to the target health agent."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.json()
+    resp = await _proxy_client.post(
+        f"{agent_url}/progress", json=body,
+        headers={"X-User-Id": user_id},
+        timeout=30.0,
+    )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
+@app.post("/agents/{agent_id}/nutrition")
+async def proxy_log_nutrition(agent_id: str, request: Request):
+    """Proxy a nutrition log entry to the target health agent."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.json()
+    resp = await _proxy_client.post(
+        f"{agent_url}/nutrition", json=body,
+        headers={"X-User-Id": user_id},
+        timeout=30.0,
+    )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
 # ── Interview agent proxy endpoints ──
 
 @app.get("/agents/{agent_id}/scores/user/me")
@@ -1192,6 +1239,53 @@ async def proxy_get_user_scores(agent_id: str, request: Request):
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     return resp.json()
+
+
+@app.post("/agents/{agent_id}/scores")
+async def proxy_create_score(agent_id: str, request: Request):
+    """Proxy a mock interview score submission to the target agent."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    user_id = request.state.user_id
+    body = await request.json()
+    resp = await _proxy_client.post(
+        f"{agent_url}/scores", json=body,
+        headers={"X-User-Id": user_id} if user_id else {},
+        timeout=30.0,
+    )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
+@app.post("/agents/{agent_id}/notes/share")
+async def proxy_share_note(agent_id: str, request: Request):
+    """Proxy a shareable-note creation request to the target agent."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    body = await request.json()
+    resp = await _proxy_client.post(f"{agent_url}/notes/share", json=body, timeout=30.0)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
+@app.get("/agents/{agent_id}/notes/shared/{token}")
+async def proxy_shared_note(agent_id: str, token: str):
+    """Proxy a shared-note download (public, no auth required)."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    resp = await _proxy_client.get(f"{agent_url}/notes/shared/{token}", timeout=60.0)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return Response(
+        content=resp.content,
+        media_type=resp.headers.get("content-type", "application/octet-stream"),
+        headers={"Content-Disposition": resp.headers.get("content-disposition", "")},
+    )
 
 
 # ── News agent proxy endpoints ──

@@ -143,6 +143,7 @@ class AgentCaller:
     async def stream_agent(self, agent_url: str, query: str, session_id: str | None = None,
                            response_format: str | None = None,
                            model_id: str | None = None,
+                           mode: str | None = None,
                            user_id: str | None = None,
                            request_id: str | None = None,
                            watchlist_id: str | None = None,
@@ -167,7 +168,9 @@ class AgentCaller:
                 },
                 "metadata": {
                     "user_id": user_id,
+                    "mode": mode,
                     "model_id": model_id,
+                    "response_format": response_format,
                     "watchlist_id": watchlist_id,
                     "as_of_date": as_of_date,
                 },
