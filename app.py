@@ -394,7 +394,7 @@ async def direct_query_stream(agent_id: str, body: DirectQueryRequest, request: 
             try:
                 while True:
                     await asyncio.sleep(_HEARTBEAT_INTERVAL)
-                    await queue.put(f": heartbeat {int(asyncio.get_event_loop().time())}\n\n")
+                    await queue.put(f": heartbeat {int(asyncio.get_running_loop().time())}\n\n")
             except asyncio.CancelledError:
                 pass
 
@@ -464,7 +464,7 @@ async def query_stream(body: QueryRequest, request: Request):
         raise HTTPException(status_code=503, detail="No agents available. Try POST /agents/refresh.")
 
     try:
-        decision = await router.route(body.query)
+        decision = await router.route_with_cache(body.query)
     except LowConfidenceError as e:
         raise HTTPException(
             status_code=422,
@@ -500,7 +500,7 @@ async def query_stream(body: QueryRequest, request: Request):
             try:
                 while True:
                     await asyncio.sleep(_HEARTBEAT_INTERVAL)
-                    await queue.put(f": heartbeat {int(asyncio.get_event_loop().time())}\n\n")
+                    await queue.put(f": heartbeat {int(asyncio.get_running_loop().time())}\n\n")
             except asyncio.CancelledError:
                 pass
 
@@ -564,11 +564,11 @@ async def query_stream(body: QueryRequest, request: Request):
 async def agents_status():
     """Fan out /health checks to all registered agents and return their status."""
     async def _check(agent_id: str, base_url: str):
-        t0 = asyncio.get_event_loop().time()
+        t0 = asyncio.get_running_loop().time()
         try:
             async with httpx.AsyncClient(timeout=3.0) as c:
                 r = await c.get(f"{base_url}/health", headers=_INTERNAL_HEADERS)
-            latency_ms = round((asyncio.get_event_loop().time() - t0) * 1000)
+            latency_ms = round((asyncio.get_running_loop().time() - t0) * 1000)
             if r.is_success:
                 return agent_id, {"status": "ok", "latencyMs": latency_ms}
             return agent_id, {"status": "error", "latencyMs": latency_ms}
