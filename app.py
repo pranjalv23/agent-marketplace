@@ -711,6 +711,19 @@ async def proxy_charts(agent_id: str, ticker: str, request: Request):
     return resp.json()
 
 
+@app.get("/agents/{agent_id}/quotes")
+async def proxy_quotes(agent_id: str, request: Request):
+    """Proxy live quotes request to the target agent (no auth required)."""
+    agent_url = registry.get_url(agent_id)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    params = dict(request.query_params)
+    resp = await _proxy_client.get(f"{agent_url}/quotes", params=params, timeout=15.0)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
 # ── Watchlist proxy endpoints ──
 
 @app.post("/agents/{agent_id}/watchlists")
