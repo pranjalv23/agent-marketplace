@@ -100,6 +100,7 @@ from router.a2a_caller import AgentCaller
 load_dotenv()
 
 from agent_sdk.logging import configure_logging
+from agent_sdk.llm_services.model_registry import list_models as _sdk_list_models
 configure_logging("marketplace")
 logger = logging.getLogger("marketplace.api")
 
@@ -624,23 +625,10 @@ async def refresh_agents():
     }
 
 
-AVAILABLE_MODELS = [
-    {"id": "azure/gpt-5-nano",      "label": "GPT-5 nano",      "provider": "Azure AI Foundry"},
-    {"id": "azure/gpt-5.4-nano",     "label": "GPT-5.4 nano",     "provider": "Azure AI Foundry"},
-    {"id": "azure/llama-4-maverick", "label": "Llama 4 Maverick", "provider": "Azure AI Foundry"},
-    {
-        "id": "azure/gpt-oss-120b",
-        "label": "GPT-OSS 120B",
-        "provider": "Azure AI Foundry",
-        "warning": "Tool calls may fail (Harmony format)",
-    },
-]
-
-
 @app.get("/models")
-async def list_models():
+async def get_models():
     """List available LLM models that can be selected from the frontend."""
-    return {"models": AVAILABLE_MODELS}
+    return {"models": _sdk_list_models()}
 
 
 # ── File proxy endpoints (upload / download / list) ──
