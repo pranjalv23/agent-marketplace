@@ -27,6 +27,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 _INTERNAL_HEADERS = {"X-Internal-API-Key": os.getenv("INTERNAL_API_KEY")} if os.getenv("INTERNAL_API_KEY") else {}
 
 from config import AGENT_URLS
+from bff_router import router as bff_router
 from router.registry import AgentRegistry
 from router.router_agent import EmbeddingRouter, LowConfidenceError
 from router.a2a_caller import AgentCaller
@@ -134,6 +135,8 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(_SecurityHeadersMiddleware)
+
+app.include_router(bff_router)
 
 
 class QueryRequest(BaseModel):

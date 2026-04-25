@@ -38,3 +38,10 @@ package-mode = false
 
 [tool.poetry.dependencies]
 agent-sdk = { path = "./agent-sdk", develop = true }
+
+[dependency-groups]
+dev = [
+    "respx (>=0.23.1,<0.24.0)",
+    "pytest (>=9.0.3,<10.0.0)",
+    "pytest-asyncio (>=1.3.0,<2.0.0)"
+]
