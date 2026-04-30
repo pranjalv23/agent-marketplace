@@ -74,7 +74,7 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-registry = AgentRegistry(AGENT_URLS)
+registry = AgentRegistry(AGENT_URLS, internal_headers=_INTERNAL_HEADERS)
 router = EmbeddingRouter()
 caller = AgentCaller()
 

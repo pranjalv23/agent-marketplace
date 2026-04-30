@@ -33,8 +33,9 @@ def _validate_card(agent_id: str, card: dict) -> bool:
 class AgentRegistry:
     """Fetches and caches Agent Cards from registered A2A agents."""
 
-    def __init__(self, agent_urls: dict[str, str]):
+    def __init__(self, agent_urls: dict[str, str], internal_headers: dict[str, str] | None = None):
         self._agent_urls = agent_urls
+        self._internal_headers = internal_headers or {}
         self._cards: dict[str, dict] = {}
         self._cards_hash: str = ""
 
@@ -51,7 +52,7 @@ class AgentRegistry:
         logger.info("Refreshing agent cards from %d agent(s)", len(self._agent_urls))
         new_cards: dict[str, dict] = {}
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=self._internal_headers) as client:
             async def _fetch(agent_id: str, base_url: str) -> tuple[str, dict | None]:
                 url = f"{base_url}/a2a/.well-known/agent-card.json"
                 for attempt in range(3):
